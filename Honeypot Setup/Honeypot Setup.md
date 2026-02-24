@@ -72,7 +72,7 @@ sudo iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 23 -j REDIRECT --to-po
 ```
 
 ### Install Cowrie Requirements 
-`
+
 ```bash
 python -m venv venv #Create python virtual environment
 source venv/bin/activate #Activate the virtual environment
