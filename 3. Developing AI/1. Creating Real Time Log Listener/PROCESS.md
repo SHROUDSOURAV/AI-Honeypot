@@ -17,4 +17,3 @@ cd cowrie_ai/
 4. Create a Python file named `log_listener.py`. Then paste the code provided in that file.
 
 
-
