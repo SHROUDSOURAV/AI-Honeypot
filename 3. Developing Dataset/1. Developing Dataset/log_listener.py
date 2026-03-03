@@ -9,10 +9,12 @@ LOG_FILE = "/var/lib/docker/volumes/docker_cowrie-var/_data/log/cowrie/cowrie.js
 DATASET_FILE = "dataset.csv"
 
 BATCH_SIZE = 20
+FLUSH_INTERVAL = 30  # flush batch every 30 seconds even if not full
 batch = []
 
 failed_login_counter = defaultdict(int)
 last_command_time = {}
+LAST_FLUSH_TIME = time.time()
 
 # =========================
 # Initialize CSV
@@ -59,7 +61,10 @@ def extract_features(log):
     # Checks time between commands from the last time commands got entered from this IP address
     # very fast commands -> might indicate automated boot behavior
     # slow commands -> might indicate human attacker
-    current_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    try:
+        current_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except Exception:
+        current_time = datetime.utcnow()
 
     if src_ip in last_command_time:
         delta = (current_time - last_command_time[src_ip]).total_seconds()
@@ -90,11 +95,13 @@ def flush_batch():
     if not batch:   # if batch is empty do nothing
         return
 
-    with open(DATASET_FILE, "a", newline="") as f:  # if batch not empty append batch data to .csv file to model training later
-        writer = csv.writer(f)  # creates write object for a csv file
-        writer.writerows(batch) # the write object used to add data to the csv file from the batch (here all 20 logs written to csv file at once)
-
-    batch = []  # clean space for the batch variable to prepare for the next 20 logs
+    try:
+        with open(DATASET_FILE, "a", newline="") as f:  # if batch not empty append batch data to .csv file to model training later
+            writer = csv.writer(f)  # creates write object for a csv file
+            writer.writerows(batch) # the write object used to add data to the csv file from the batch (here all 20 logs written to csv file at once)
+        batch = []  # clean space for the batch variable to prepare for the next 20 logs
+    except Exception as e:
+        print(f"[!] Error writing to dataset: {e}")
 
 # =========================
 # Follow File with Rotation Handling
@@ -102,6 +109,11 @@ def flush_batch():
 def follow():
     while True:
         try:
+            if not os.path.exists(LOG_FILE):
+                print("[!] Log file not found. Waiting for Cowrie...")
+                time.sleep(5)
+                continue
+
             with open(LOG_FILE, "r") as file:
                 file.seek(0, os.SEEK_END)   # read the file from start to finish
 
@@ -109,25 +121,24 @@ def follow():
                     line = file.readline()  # stores a a single line
 
                     if not line:
-                        # Detect log rotation
-                        if not os.path.exists(LOG_FILE):
-                            break
                         time.sleep(0.5)
                         continue
 
                     yield line  # follow() returns a generator object. Each generator object contains multiple new log lines
                                 # with yield we get one line at a time or a new log at a time before moving to the next log
 
-        except FileNotFoundError:   # exception handling incase log file not found so tries every 5 seconds
-            print("[!] Log file not found. Waiting for Cowrie...")
+        except Exception as e:   # exception handling incase log file not found so tries every 5 seconds
+            print(f"[!] Error in follow(): {e}")
             time.sleep(5)
 
 # =========================
 # main()
 # =========================
 def main():
+    global LAST_FLUSH_TIME
+
     print("[+] AI Log Listener Started...")
-    initialize_dataset()   
+    initialize_dataset()
 
     try:
         for line in follow():
@@ -145,8 +156,14 @@ def main():
                 batch.append(row)   # stores those 11 datatypes in each single column for a particular log
                                     # so 11 = 1 single log = 1 dataset row for a total for 20 logs
 
-                if len(batch) >= BATCH_SIZE:    
+                if len(batch) >= BATCH_SIZE:
                     flush_batch()
+                    LAST_FLUSH_TIME = time.time()
+
+            # Flush periodically even if batch not full
+            if time.time() - LAST_FLUSH_TIME > FLUSH_INTERVAL:
+                flush_batch()
+                LAST_FLUSH_TIME = time.time()
 
     except KeyboardInterrupt:
         print("\n[+] Shutting down cleanly...")
